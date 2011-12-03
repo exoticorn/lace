@@ -1,0 +1,15 @@
+require 'rake/packagetask'
+require 'rake/rdoctask'
+
+Rake::PackageTask.new('lace', '0.2') do |p|
+	p.need_tar = true
+	p.need_zip = true
+	p.package_files.include('README', 'bin/*', 'lib/lace/*.rb', 'setup.rb', 'pre-install.rb')
+end
+
+Rake::RDocTask.new do |rd|
+	rd.main = 'README'
+	rd.rdoc_files.include('README', 'bin/*', 'lib/lace/*.rb')
+	rd.options << '--all'
+end
+

@@ -1,0 +1,197 @@
+#!/usr/bin/env ruby
+
+lib_dir = File.dirname(__FILE__) + '/../lib'
+$: << lib_dir if File.directory?(lib_dir + '/lace')
+
+require 'lace/projectwriterbase'
+require 'optparse'
+
+module Lace
+	class QTCreatorProjectFileWriter < ProjectFileWriterBase
+		class QTDataWriter
+			def initialize(indent, valuemap = nil)
+				@lines = []
+				@indent = indent
+				@valuemap = valuemap
+			end
+			
+			def add(name, value, type = nil)
+				if @valuemap
+					@lines << QTDataWriter.value(value, @indent, name, type)
+				else
+					@lines << @indent + '<data>'
+					@lines << @indent + " <variable>#{name}</variable>"
+					@lines << QTDataWriter.value(value, @indent + ' ', nil, type)
+					@lines << @indent + '</data>'
+				end
+			end
+			
+			def map(name)
+				if @valuemap
+					@lines << @indent + "<valuemap key=\"#{name}\" type=\"QVariantMap\">"
+					m = QTDataWriter.new(@indent + ' ', true)
+					yield m
+					@lines << m.to_s
+					@lines << @indent + "</valuemap>"
+				else
+					@lines << @indent + '<data>'
+					@lines << @indent + " <variable>#{name}</variable>"
+					@lines << @indent + " <valuemap type=\"QVariantMap\">"
+					m = QTDataWriter.new(@indent + '  ', true)
+					yield m
+					@lines << m.to_s
+					@lines << @indent + " </valuemap>"
+					@lines << @indent + '</data>'
+				end
+			end
+			
+			def to_s
+				@lines.join("\n")
+			end
+			
+			def self.open
+				writer = self.new(' ')
+				yield writer
+				return writer.to_s
+			end
+			
+			def self.value(v, indent, key = nil, type = nil)
+				if v.is_a? Array
+					line = indent + '<valuelist '
+				else
+					unless type
+						type = case v
+						when Integer; 'int'
+						when TrueClass, FalseClass; 'bool'
+						else; 'QString'
+						end
+					end
+					line = indent + '<value '
+				end
+				line << "key=\"#{key}\" " if key
+				if v.is_a? Array
+					line << 'type="QVariantList"'
+					if v.empty?
+						line << '/>'
+					else
+						line << ">"
+						lines = [line]
+						v.each do |entry|
+							lines << self.value(entry, indent + ' ')
+						end
+						lines << indent + '</valuelist>'
+						line = lines.join("\n")
+					end
+				else
+					line << "type=\"#{type}\">#{v}</value>"
+				end
+				return line
+			end
+		end
+	
+		def write(filename, jobs)
+			open_file(filename) do |file|
+				file.puts '[General]'
+			end
+			
+			open_file(filename.to_s + '.user') do |file|
+				file.puts '<!DOCTYPE QtCreatorProject>'
+				file.puts '<qtcreator>'
+				data = QTDataWriter.open do |writer|
+					writer.add 'GenericProjectManager.GenericProject.Toolchain', 1
+					writer.add 'ProjectExplorer.Project.ActiveTarget', 0
+					writer.map 'ProjectExplorer.Project.EditorSettings' do |map|
+						map.add 'EditorConfiguration.Codec', 'System', 'QByteArray'
+					end
+					writer.map 'ProjectExplorer.Project.Target.0' do |map|
+						map.add 'ProjectExplorer.ProjectConfiguration.DisplayName', 'Desktop'
+						map.add 'ProjectExplorer.ProjectConfiguration.Id', 'GenericProjectManager.GenericTarget'
+						map.add 'ProjectExplorer.Target.ActiveBuildConfiguration', 0
+						map.add 'ProjectExplorer.Target.ActiveRunConfiguration', 0
+						@builds.each_with_index do |build, index|
+							map.map "ProjectExplorer.Target.BuildConfiguration.#{index}" do |map2|
+								map2.add 'GenericProjectManager.GenericBuildConfiguration.BuildDirectory', @project.path
+								map2.map 'ProjectExplorer.BuildConfiguration.BuildStep.0' do |map3|
+									cmd, params = build_command(build, jobs).split($;, 2)
+									map3.add 'GenericProjectManager.GenericMakeStep.BuildTargets', []
+									map3.add 'GenericProjectManager.GenericMakeStep.MakeArguments', params.split
+									map3.add 'GenericProjectManager.GenericMakeStep.MakeCommand', cmd
+									map3.add 'ProjectExplorer.ProjectConfiguration.DisplayName', 'lace'
+									map3.add 'ProjectExplorer.ProjectConfiguration.Id', 'GenericProjectManager.GenericMakeStep'
+								end
+								map2.add 'ProjectExplorer.BuildConfiguration.BuildStepsCount', 1
+								map2.add 'ProjectExplorer.BuildConfiguration.CleanStepsCount', 0
+								map2.add 'ProjectExplorer.BuildConfiguration.ClearSystemEnvironment', false
+								map2.add 'ProjectExplorer.BuildConfiguration.UserEnvironmentChanges', []
+								map2.add 'ProjectExplorer.ProjectConfiguration.DisplayName', 'debug'
+								map2.add 'ProjectExplorer.ProjectConfiguration.Id', 'GenericProjectManager.GenericBuildConfiguration'
+							end
+						end
+						map.add 'ProjectExplorer.Target.BuildConfigurationCount', @builds.size
+						map.map 'ProjectExplorer.Target.RunConfiguration.0' do |map2|
+							map2.add 'ProjectExplorer.CustomExecutableRunConfiguration.Arguments', []
+							map2.add 'ProjectExplorer.CustomExecutableRunConfiguration.BaseEnvironmentBase', 2
+							map2.add 'ProjectExplorer.CustomExecutableRunConfiguration.Executable', @project.build_path + @project.name
+							map2.add 'ProjectExplorer.CustomExecutableRunConfiguration.UseTerminal', false
+							map2.add 'ProjectExplorer.CustomExecutableRunConfiguration.UserEnvironmentChanges', []
+							map2.add 'ProjectExplorer.CustomExecutableRunConfiguration.UserName', 'debug'
+							map2.add 'ProjectExplorer.CustomExecutableRunConfiguration.UserSetName', true
+							map2.add 'ProjectExplorer.CustomExecutableRunConfiguration.WorkingDirectory', '$BUILDDIR'
+							map2.add 'ProjectExplorer.ProjectConfiguration.DisplayName', 'debug'
+							map2.add 'ProjectExplorer.ProjectConfiguration.Id', 'ProjectExplorer.CustomExecutableRunConfiguration'
+						end
+						map.add 'ProjectExplorer.Target.RunConfigurationCount', 1
+					end
+					writer.add 'ProjectExplorer.Project.TargetCount', 1
+					writer.add 'ProjectExplorer.Project.Updater.FileVersion', 4
+				end
+				file.puts data
+				file.puts '</qtcreator>'
+			end
+			
+			open_file(filename.dirname + (filename.basename('.*').to_s + '.config')) do |file|
+				file.puts '// ADD PREDEFINED MACROS HERE!'
+			end
+			
+			base = filename.dirname
+			open_file(filename.dirname + (filename.basename('.*').to_s + '.files')) do |file|
+				get_files.each do |fname|
+					file.puts Helpers.make_relative2(fname, base)
+				end
+			end
+
+			open_file(filename.dirname + (filename.basename('.*').to_s + '.includes')) do |file|
+				get_attribute(:cpp_include_dir).each do |path|
+					file.puts path
+#					file.puts Helpers.make_relative2(path, base)
+				end
+			end
+		end
+	end
+end
+
+project_file = 'project.lace'
+proj_file = nil
+proj_jobs = ENV['NUMBER_OF_PROCESSORS'] || '1'
+
+OptionParser.new do |opts|
+	opts.banner = "Usage: create_vcproject.rb [OPTIONS] [BUILDS]"
+	opts.on("-p", "--project PROJECT_FILE", "The project file to read (default: project.lace)") do |fname|
+		project_file = fname
+	end
+	opts.on("-o", "--output CREATOR_FILENAME", "The filename of the resulting .vcproj file (default: build/<project_name>.creator)") do |fname|
+		proj_file = fname
+	end
+	opts.on("-j", "--jobs NUM_JOBS", Integer, "Number of compile jobs to execute in parallel") do |jobs|
+		proj_jobs = jobs
+	end
+end.parse!
+
+if ARGV.empty?
+	puts 'Error: no build targets given.'
+	exit 1
+end
+
+writer = Lace::QTCreatorProjectFileWriter.new(project_file, ARGV)
+writer.write(proj_file ? proj_file : writer.project.path + "build/#{writer.project.name}.creator", proj_jobs)
+
