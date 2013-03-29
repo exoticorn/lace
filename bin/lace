@@ -1,4 +1,4 @@
-#!/usr/bin/env ruby1.9.1
+#!/usr/bin/env ruby
 
 # The +lace+ command lets you build, rebuild or clean a project. See the Lace README for more
 # information about lace project definition files.
@@ -48,8 +48,9 @@ require 'lace/project'
 require 'lace/builder'
 
 build = ''
-num_jobs = 1
+num_jobs = Lace::Helpers.numCPUs
 clean = false
+build_path = nil
 
 OptionParser.new do |opts|
 	opts.banner = "Usage: lace [OPTIONS] [PROJECT_LACE]"
@@ -79,11 +80,14 @@ OptionParser.new do |opts|
 				exit 1
 		end
 	end
+	opts.on("-p", "--build-path PATH", "Base build dir") do |path|
+		build_path = path
+	end
 end.parse!
 
 filename = ARGV.shift || 'project.lace'
 
-project = Lace::Project.load(filename, build.split('/'))
+project = Lace::Project.load(filename, build.split('/'), build_path)
 
 builder = Lace::Builder.new
 

@@ -86,10 +86,5 @@ OptionParser.new do |opts|
 	end
 end.parse!
 
-if ARGV.empty?
-	puts 'Error: no build targets given.'
-	exit 1
-end
-
 writer = Lace::SlickEditProjectFileWriter.new(project_file, ARGV)
 writer.write(proj_file ? proj_file : writer.project.path + "build/#{writer.project.name}.vpj", proj_jobs)

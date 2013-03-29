@@ -24,7 +24,7 @@ require 'rbconfig'
 
 module Lace
 	USE_PATHNAME_MAKE_RELATIVE = false
-	PLATFORM_WIN32 = RUBY_PLATFORM =~ /win32/
+	PLATFORM_WIN32 = RUBY_PLATFORM =~ /win32|mingw32/
 	
 	class StdOutString < String; end
 	class StdErrString < String; end
@@ -45,8 +45,14 @@ module Lace
 			end
 		else
 			def self.make_relative2(path, from)
+				return path.to_s if path.to_s =~ /^(\w:)/ && from.to_s[0, 2].downcase != $1.downcase		# don't try to create a relative path to a different drive on win32
 				basename = from.to_s
 				path = path.to_s
+
+				if PLATFORM_WIN32
+					basename = basename.downcase
+					path = path.downcase
+				end
 
 				filenameparts = path.split(/\/|\\/)
 				basenameparts = basename.split(/\/|\\/)
@@ -110,11 +116,15 @@ module Lace
 					exitcode = waitth.value.exitstatus
 				end
 			else
-				exitcode = system(*args) ? 0 : 1
+				if system(*args)
+					exitcode = 0
+				else
+					exitcode = 1
+				end
 			end
 
 			if exitcode != 0
-				trace 'build aborted - the following command failed:'
+				trace "build aborted - the following command failed with exitcode #{exitcode}:"
 				# output the original arguments because visual studio crashes when the compiler path is relative...
 				trace "%s", [original_args].flatten.join(' ')
 				raise AbortBuild
@@ -205,7 +215,7 @@ module Lace
 		end
 		
 		def self.numCPUs
-			return ENV['NUMBER_OF_PROCESSORS'] || 1 if PLATFORM_WIN32
+			return ENV['NUMBER_OF_PROCESSORS'].to_i || 1 if PLATFORM_WIN32
 			if File.exist?('/proc/cpuinfo')
 				return [1, File.read('/proc/cpuinfo').scan(/^processor\s+:/).size].max
 			end

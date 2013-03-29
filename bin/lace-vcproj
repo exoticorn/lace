@@ -38,6 +38,8 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 
+require 'open3'
+
 lib_dir = File.dirname(__FILE__) + '/../lib'
 $: << lib_dir if File.directory?(lib_dir + '/lace')
 
@@ -79,7 +81,7 @@ module Lace
 				@builds.each do |build|
 					project = find_project(build)
 					target_dir = make_local(project.build_path)
-					build_cmd = build_command(build, jobs)
+					build_cmd = build_command(build, jobs,"&quot;")
 					platform = get_attribute(:vcproj_platform, build).first || "Win32"
 
 					executable_base_filename = (@project.globals.target_name || @project.name)
@@ -189,6 +191,15 @@ project_file = 'project.lace'
 vcproj_file = nil
 vcproj_version = ENV['LACE_VCPROJ_VERSION'] || '7.10'
 vcproj_jobs = ENV['NUMBER_OF_PROCESSORS'] || '1'
+build_path = nil
+
+if( vcproj_version == '10.00' )
+	# run create_vcxproj instead:
+	puts 'Creating Visual Studio 2010 Project files'
+	vcxproj_script = File.dirname(__FILE__) + '/lace-vcxproj'	
+	load vcxproj_script
+	exit 0
+end
 
 OptionParser.new do |opts|
 	opts.banner = "Usage: create_vcproject.rb [OPTIONS] [BUILDS]"
@@ -208,13 +219,12 @@ OptionParser.new do |opts|
 	opts.on("-j", "--jobs NUM_JOBS", Integer, "Number of compile jobs to execute in parallel") do |jobs|
 		vcproj_jobs = jobs
 	end
+	opts.on("-b", "--build-path PATH", "Base build dir") do |path|
+		build_path = path
+	end
 end.parse!
 
-if ARGV.empty?
-	puts 'Error: no build targets given.'
-	exit 1
-end
-
-writer = Lace::VCProjectFileWriter.new(project_file, ARGV)
-target_name = vcproj_file ? vcproj_file : writer.project.path + "build/#{writer.project.name}.vcproj"
+writer = Lace::VCProjectFileWriter.new(project_file, ARGV,build_path)
+writer.build_path = build_path || writer.project.path + "build"
+target_name = vcproj_file ? vcproj_file : "#{writer.build_path}/#{writer.project.name}.vcproj"
 writer.write(target_name, vcproj_version, vcproj_jobs)

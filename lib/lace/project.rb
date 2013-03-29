@@ -43,8 +43,12 @@ module Lace
 		def initialize(filename, build_sub_path, build_tags, parent_project = nil)
 			@filename = filename
 			@path = parent_project ? parent_project.build_path : filename.dirname
-			@build_sub_path = build_sub_path
-			@build_path = @path + build_sub_path
+			if @build_sub_path.is_a?(Pathname)
+				@build_path = build_sub_path
+			else
+				@build_sub_path = build_sub_path
+				@build_path = @path + build_sub_path
+			end
 			@parent_project = parent_project
 			@sub_projects = []
 			@modules = []
@@ -56,6 +60,7 @@ module Lace
 			@file_mapping = {}
 			@global_context = Context.new(self, nil)
 			@compiler_set = CompilerSet.new
+			@compiler_white_list = []
 			@build_tags = build_tags
 			@globals = OpenStruct.new
 			@name = 'unnamed'
@@ -90,14 +95,14 @@ module Lace
 			end
 			
 			if section
-				if mod.sections[section]
-					mod.sections[section].call
+				if mod.sections[section]					
+					mod.run_section( section )
 				else
 					Helpers.trace("Error: Unable to find section '%s' in module '%s'", section, get_module_display_name(path))
 					return nil
 				end
 			else
-				mod.sections['main'].call if mod.sections['main']
+				mod.run_section( 'main' )				
 			end
 			
 			Dir.chdir(current_dir)
@@ -128,7 +133,11 @@ module Lace
 		def add_module_alias(new_name,old_name)
 			@module_aliases[new_name] = old_name
 		end
-		
+
+		def add_weak_module_alias(new_name, old_name)
+			@module_aliases[new_name] = @module_aliases[new_name] || old_name
+		end
+
 		def add_import(module_name, importing_module,weak)
 			import = @imports[module_name] || Import.new(module_name, nil, [],weak)
 			import.imported_from << importing_module if importing_module 
@@ -164,7 +173,7 @@ module Lace
 			return @name if module_path == @path
 			
 			shortest_path = nil
-			@import_paths.each do |path|				
+			@import_paths.each do |path|	
 				if module_path.to_s.index( path.to_s ) == 0
 					relative_module_path = module_path.to_s[ path.to_s.length + 1, module_path.to_s.length ]
 					
@@ -178,8 +187,21 @@ module Lace
 			return shortest_path
 		end
 
+		def get_module_import_path(module_path)
+			@import_paths.each do |path|	
+				if ( module_path.to_s + '/' ).index( path.to_s + '/' ) == 0
+					return path.to_s
+				end	
+			end
+			return module_path.to_s
+		end
+
+		def resolve_module_alias( name )
+			@module_aliases[ name ] || name
+		end
+		
 		def find_module(name, default_filename = 'module.lace',error_on_duplicates = false)
-			resolvedName = @module_aliases[ name ] || name
+			resolvedName = resolve_module_alias( name )
 			
 			if resolvedName == nil 
 				resolvedName = "local"
@@ -191,11 +213,11 @@ module Lace
 				if module_path.exist?
 					# first try: absolute module path given
 					filename = module_path		
-					# second try: modulename.lace
-					filename = module_path  + ( resolvedName.to_s + ".lace" ) unless filename.file? 
+					# second try: last part of module path:
+					module_filename = resolvedName.to_s.split( '/' ).last.to_s + ".lace"
+					filename = module_path  + ( module_filename ) unless filename.file? 
 					# third try: default_filename
 					filename = module_path + default_filename unless filename.file? 
-					
 					found_filenames << filename if filename.file?
 				end
 			end
@@ -233,6 +255,10 @@ module Lace
 							STDERR.printf "Module '%s' could not be found.\nImported from:\n", name
 							import.imported_from.each do |mod|
 								STDERR.printf "  %s\n", mod.path
+							end
+							STDERR.printf "Search directories:\n"
+							@import_paths.each do |path|
+								STDERR.printf "  %s\n", path.to_s
 							end
 							exit 1
 						end
@@ -315,12 +341,19 @@ module Lace
 			end
 		end
 
-		def self.load(filename, build_tags = [])
-			$log.info("Loading project file #{filename} with build=#{build_tags.join('/')}") if $log
-			Helpers.trace "Loading project file '%s' with build='%s'", filename, build_tags.join('/')
+		def self.load(filename, build_tags = [], build_dir = nil)
+			if not build_tags.empty?
+				$log.info("Loading project file #{filename} with build=#{build_tags.join('/')}") if $log
+				Helpers.trace "Loading project file '%s' with build='%s'", filename, build_tags.join('/')
+			end
 			filename = Pathname.new(filename).expand_path
 			path = filename.dirname
-			project = self.new(filename, 'build/' + build_tags.join('/'), build_tags)
+			if build_dir
+				build_dir = Pathname.new(build_dir).expand_path + build_tags.join('/')
+			else
+				build_dir = 'build/' + build_tags.join('/')
+			end
+			project = self.new(filename, build_dir, build_tags)
 			project.add_import_path(path)
 			project.read_module(filename)
 			project.resolve_imports
@@ -336,8 +369,23 @@ module Lace
 				puts "error: @project.path= is not allowed for sub-projects"
 				exit 1
 			end
+			unless @build_sub_path
+				puts 'error: build path clash (lace command line vs. @project.path='
+				exit 1
+			end
 			@path = to_path(path)
 			@build_path = @path + @build_sub_path
+		end
+		
+		def add_compilertag_to_whitelist( tag )		
+			@compiler_white_list << tag
+		end
+		
+		def add_compiler( compiler )
+			if not @compiler_white_list.empty? and not compiler.input_pattern.matches?( @compiler_white_list )
+				return
+			end			
+			@compiler_set << compiler
 		end
 		
 		def set_project_output_root_path(path)

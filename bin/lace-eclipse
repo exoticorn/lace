@@ -1,4 +1,4 @@
-#!/usr/bin/env ruby1.9.1
+#!/usr/bin/env ruby
 
 # Creates an Eclipse project that is set up to build using the +lace+ command.
 #
@@ -55,7 +55,13 @@ module Lace
 				end
 			end
 			external_project_paths = external_project_paths.uniq
-					
+			
+			java_source_dirs = @projects.map do |project|
+				project.global_context.get_attribute_set(:java_source_dirs)
+			end.flatten.uniq
+			
+			external_tools = @projects.map {|proj| proj.global_context.get_attribute_set(:eclipse_external_tool) }.flatten.uniq
+			
 			open_file(@project.path + '.project') do |file|
 				file.puts '<?xml version="1.0" encoding="UTF-8"?>'
 				file.puts '<projectDescription>'
@@ -65,8 +71,23 @@ module Lace
 				file.puts "\t\t\t<name>org.eclipse.cdt.managedbuilder.core.genmakebuilder</name>"
 				file.puts "\t\t\t<triggers>clean,full,incremental,</triggers>"
 				file.puts "\t\t</buildCommand>"
+				for tool in external_tools
+					file.puts "\t\t<buildCommand>"
+					file.puts "\t\t\t<name>org.eclipse.ui.externaltools.ExternalToolBuilder</name>"
+					file.puts "\t\t\t<triggers>full,incremental,</triggers>"
+					file.puts "\t\t\t<arguments>"
+					file.puts "\t\t\t\t<dictionary>"
+					file.puts "\t\t\t\t\t<key>LaunchConfigHandle</key>"
+					file.printf "\t\t\t\t\t<value>&lt;project&gt;/.externalToolBuilders/%s.launch</value>\n", tool[:name]
+					file.puts "\t\t\t\t</dictionary>"
+					file.puts "\t\t\t</arguments>"
+					file.puts "\t\t</buildCommand>"
+				end
 				file.puts "\t\</buildSpec>"
 				file.puts "\t<natures>"
+				unless java_source_dirs.empty?
+					file.puts "\t\t<nature>org.eclipse.jdt.core.javanature</nature>"
+				end
 				file.puts "\t\t<nature>org.eclipse.cdt.core.ccnature</nature>"
 				file.puts "\t\t<nature>org.eclipse.cdt.managedbuilder.core.managedBuildNature</nature>"
 				file.puts "\t\t<nature>org.eclipse.cdt.core.cnature</nature>"
@@ -85,6 +106,29 @@ module Lace
 				file.puts "\t</linkedResources>"
 
 				file.puts "</projectDescription>"
+			end
+			
+			unless java_source_dirs.empty?
+				open_file(@project.path + '.classpath') do |file|
+					file.puts '<?xml version="1.0" encoding="UTF-8"?>'
+					file.puts '<classpath>'
+					base_paths = external_project_paths.map {|path| path.parent}.uniq + [@project.path]
+					for dir in java_source_dirs
+						paths = base_paths.map {|base| Helpers.make_relative2(dir, base) }
+						paths = paths.sort_by {|path| path.size }
+						file.printf "\t<classpathentry kind=\"src\" path=\"%s\"/>\n", paths.first
+					end
+					java_lib_paths = @projects.map do |project|
+						project.global_context.get_attribute_set(:java_lib_path) +
+							project.global_context.get_attribute_set(:android_library_jar)
+					end.flatten.uniq
+					for lib in java_lib_paths
+						file.printf "\t<classpathentry kind=\"lib\" path=\"%s\"/>\n", lib.to_s
+					end
+					first_java_project = @projects.find {|proj| !proj.global_context.get_attribute_set(:java_source_dirs).empty? }
+					file.printf "\t<classpathentry kind=\"output\" path=\"%s\"/>\n", Helpers.make_relative2(first_java_project.build_path + 'java', @project.path)
+					file.puts '</classpath>'
+				end
 			end
 			
 			open_file(@project.path + '.cproject') do |file|
@@ -118,7 +162,11 @@ module Lace
 					file.printf "enableAutoBuild=\"false\" enableCleanBuild=\"true\" enableIncrementalBuild=\"true\" "
 					file.printf "id=\"org.eclipse.cdt.build.core.settings.default.builder.1820907424\" "
 					file.printf "incrementalBuildTarget=\"\" keepEnvironmentInBuildFile=\"false\" managedBuildOn=\"false\" name=\"Gnu Make Builder\" "
-					file.printf "parallelizationNumber=\"1\" superClass=\"org.eclipse.cdt.build.core.settings.default.builder\"/>\n"
+					file.printf "parallelizationNumber=\"1\" superClass=\"org.eclipse.cdt.build.core.settings.default.builder\">\n"
+					file.printf "\t\t\t\t\t\t\t\t<outputEntries>\n"
+					file.printf "\t\t\t\t\t\t\t\t\t<entry flags=\"VALUE_WORKSPACE_PATH\" kind=\"outputPath\" name=\"%s\"/>\n", Helpers::make_relative2(find_project(build).build_path, @project.path)
+					file.printf "\t\t\t\t\t\t\t\t</outputEntries>\n"
+					file.printf "\t\t\t\t\t\t\t</builder>\n"
 
 					# languages
 					[['GNU C++', 'g++', ['cxxSource', 'cxxHeader']]].each do |lang_name, lang_id, cont_types|
@@ -178,6 +226,28 @@ module Lace
 				file.printf "\t</storageModule>\n"
 				file.puts '</cproject>'
 			end
+			
+			unless external_tools.empty?
+				for tool in external_tools
+					open_file(@project.path + '.externalToolBuilders' + (tool[:name] + '.launch')) do |file|
+						file.puts '<?xml version="1.0" encoding="UTF-8" standalone="no"?>'
+						file.puts '<launchConfiguration type="org.eclipse.ui.externaltools.ProgramBuilderLaunchConfigurationType">'
+						file.printf "\t<stringAttribute key=\"org.eclipse.ui.externaltools.ATTR_LOCATION\" value=\"%s\"/>\n", tool[:exe]
+						file.printf "\t<stringAttribute key=\"org.eclipse.ui.externaltools.ATTR_TOOL_ARGUMENTS\" value=\"%s\"/>\n", (tool[:arguments] || []).join(' ')
+						file.printf "\t<stringAttribute key=\"org.eclipse.ui.externaltools.ATTR_WORKING_DIRECTORY\" value=\"%s\"/>\n", @project.path
+						file.puts "\t<mapAttribute key=\"org.eclipse.debug.core.environmentVariables\">"
+						for key, value in (tool[:env] || {})
+							file.printf "\t\t<mapEntry key=\"%s\" value=\"%s\"/>\n", key, value
+						end
+						file.puts "\t</mapAttribute>"
+						file.puts "\t<booleanAttribute key=\"org.eclipse.debug.ui.ATTR_LAUNCH_IN_BACKGROUND\" value=\"false\"/>"
+						file.puts "\t<booleanAttribute key=\"org.eclipse.ui.externaltools.ATTR_BUILDER_ENABLED\" value=\"false\"/>"
+						file.puts "\t<stringAttribute key=\"org.eclipse.ui.externaltools.ATTR_RUN_BUILD_KINDS\" value=\"incremental,\"/>"
+						file.puts "\t<booleanAttribute key=\"org.eclipse.ui.externaltools.ATTR_TRIGGERS_CONFIGURED\" value=\"true\"/>"
+						file.puts '</launchConfiguration>'
+					end
+				end
+			end
 		end
 	end
 end
@@ -195,11 +265,6 @@ OptionParser.new do |opts|
 		num_jobs = jobs
 	end
 end.parse!
-
-if ARGV.empty?
-	puts 'Error: no build targets given.'
-	exit 1
-end
 
 writer = Lace::EclipseProjectWriter.new(project_file, ARGV)
 writer.write(num_jobs)

@@ -20,23 +20,57 @@
 
 require 'lace/project'
 require 'fileutils'
+require 'open3'
 
 module Lace
 	class ProjectFileWriterBase
 		include PathMixin
-		attr_reader :project, :projects, :builds
+		attr_reader :project, :projects, :builds, :build_path
+		attr_writer :build_path
 		
-		def initialize(project_filename, builds)
+		def initialize(project_filename, builds,build_dir=nil)
 			@lace_bin = to_path($0).dirname
-			builds << 'default' if builds.empty?
+			
+			builds=get_available_build_tags(project_filename) if builds.empty?
+			
 			@builds = builds
 			@project_mapping = {}
 			@projects = builds.map do |build|
-				@project_mapping[build] = Lace::Project.load(project_filename, build.split('/'))
+				@project_mapping[build] = Lace::Project.load(project_filename, build.split('/'),build_dir)
 			end
 			@project = @projects.first
 		end
 		
+		def get_available_build_tags(project_filename)
+			# call it once to get the available targets:
+			# load the project to get available targets:
+			lace_cmd = "ruby #{@lace_bin}/lace #{project_filename}".gsub( /\//, '\\' )
+
+			exitcode = 1
+			build_targets = []
+		
+			status = Open3::popen3( lace_cmd ) do |io_in, io_out, io_err, waitth|			
+				io_out.each do |line|  
+					if line =~ /build_tags=(.*)/
+						build_targets = eval( line.match( /build_tags=(.*)/ )[ 1 ] )								
+					else
+						puts line
+					end
+				end  
+				io_err.each do |line|
+					puts line
+				end
+				
+				exitcode = waitth.value.exitstatus
+				return build_targets
+			end  
+			
+			if exitcode != 0 || build_targets.empty?
+				puts "No build tags defined in project #{project_file}"
+				exit 1
+			end
+		end
+			
 		def open_file(filename, &block)
 			old_pwd = Dir.getwd
 			FileUtils.mkpath(File.dirname(filename))
@@ -81,8 +115,9 @@ module Lace
 			@project_mapping[build]
 		end
 		
-		def build_command(build, jobs = '1')
-			"#{Helpers::ruby_exe} #{@lace_bin + 'lace'} -j #{jobs} -b #{build} #{find_project(build).filename}"
+		def build_command(build, jobs = '1',quote_string="")
+			build_path_option = ' -p ' + @build_path.to_s if @build_path
+			"#{quote_string}#{Helpers::ruby_exe}#{quote_string} #{@lace_bin + 'lace'} -j #{jobs} -b #{build} #{find_project(build).filename}#{build_path_option || ''}"
 		end
 	end
 end

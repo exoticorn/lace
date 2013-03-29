@@ -11,7 +11,7 @@ require 'fileutils'
 
 files = Set.new
 
-basedir = '/home/dranke/projects/startrek/'
+basedir = Dir.pwd + '/'
 
 for build in ARGV
 	project_dir, build = build.split(':', 2)

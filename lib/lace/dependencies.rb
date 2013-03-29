@@ -32,13 +32,28 @@ module Lace
 				end
 				result.to_a
 			end
-			File.open(filename, 'w') {|f| f.write outputs.join(';') + '|' + inputs.join(';') }
+			written = false
+			until written == true
+				begin
+					File.open(filename, 'w') {|f| f.write outputs.join(';') + '|' + inputs.join(';') }
+					written = true
+				rescue Errno::EBADF
+					# do nothing. This happens occasionally, we don't know why.
+				end
+			end
+
 		end
 		
 		def self.load_lace_dependencies(filename)
 			file = nil
 			READ_MUTEX.synchronize do
-				file = File.read(filename)
+				until file
+					begin
+						file = File.read(filename)
+					rescue Errno::ENOENT
+						# do nothing. This happens occasionally, we don't know why.
+					end
+				end
 			end
 			o, i = file.chomp.split('|')
 			dependencies = Dependencies.new

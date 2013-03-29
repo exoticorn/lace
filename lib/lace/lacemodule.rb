@@ -33,6 +33,7 @@ module Lace
 		# the path of the directory the module was defined in
 		attr_reader :path
 		attr_reader :sections
+		attr_reader :importlist
 	
 		def initialize(project, path, options, module_name)
 			@path = path
@@ -43,6 +44,8 @@ module Lace
 			@current_context = Context.new(project, project.global_context)
 			@sections = {}
 			@module_name = module_name
+			@importlist = []
+			@current_section_name = "main"
 		end
 		
 		# The import method adds the named module to a list of modules to be loaded.
@@ -53,8 +56,11 @@ module Lace
 		# which it will pass to the module_options method.
 		def import(module_name, options = nil)
 			module_name = @module_name + module_name if module_name =~ /^#/
+			module_name = @project.resolve_module_alias( module_name )
 			@project.add_module_options(module_name, options) if options
 			@current_context.add_import(@project.add_import(module_name, self,false))
+			source_module_name = ( @module_name || @project.to_s ) + '#' + @current_section_name
+			@importlist << [ module_name, source_module_name ]
 		end
 		
 		# The import_weak method adds the named module to a list of modules to be loaded
@@ -102,6 +108,12 @@ module Lace
 			@current_context = old_context
 		end
 		
+		def run_section( section )
+			@current_section_name = section
+			@sections[section].call if @sections[section]
+			@current_section_name = ""
+		end
+		
 		# The add_file method adds one or more files specified by a path with wildcards.
 		# All files matching these wildcards are added with the space seperated tags given
 		# as the second parameters.
@@ -126,7 +138,7 @@ module Lace
 					Helpers.trace_error Helpers.callstack, "Warning: %s", msg
 				end
 			end
-			files.each do |filename|
+			files.sort.each do |filename|
 				path = to_path(filename)
 				file_tags = tags.to_set
 				ext = /\.[^.]+$/.match(path.to_s)
@@ -234,10 +246,14 @@ module Lace
 			output_tags.concat(args[:output_tags]) if args[:output_tags]
 			
 			raise LaceError.new("Compiler definition is missing an :input_pattern") unless args[:input_pattern]
-			
+	
 			add_compiler(output_dir, compiler, args[:input_pattern], args[:dependency_pattern], output_tags)
 			return compiler_class
 		end	
+		
+		def add_compilertag_to_whitelist( tag )
+			@project.add_compilertag_to_whitelist( tag )
+		end
 		
 		# This is just a convinience function to create a tag. tag(value is the same as Tag.new(value).
 		def tag(value)
@@ -254,7 +270,15 @@ module Lace
 		def module_alias(new_name, old_name)
 			@project.add_module_alias(new_name,old_name)
 		end
+
+		def module_alias_weak(new_name, old_name)
+			@project.add_weak_module_alias(new_name, old_name)
+		end
 		
+		def module_available?(module_name)
+			return @project.find_module(module_name)
+		end
+
 		# This executes the file at the given path in the current context. In contrast to an
 		# import, the code is executed immideately, so that you can define new methods or
 		# change the @build_tags that are then available to the code after the inject statement.
@@ -323,7 +347,7 @@ module Lace
 			compiler.dependency_pattern = dependency_pattern
 			compiler.output_tags = to_tags(output_tags)
 			compiler.path = @path
-			@project.compiler_set << compiler
+			@project.add_compiler( compiler )
 		end
 		
 		def to_tags(list)
